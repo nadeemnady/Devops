@@ -10,6 +10,14 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import pandas as pd
+import os
+
+# Get the active cluster context for reporting
+def get_cluster_context():
+    contexts, active_context = config.list_kube_config_contexts()
+    return active_context["context"].get("cluster", "UnknownCluster")
+
+CLUSTER_CONTEXT = get_cluster_context()
 
 # ==============================================================================
 # ADVANCED UNUSED RESOURCE DETECTION FUNCTIONS (PART 2)
@@ -24,11 +32,12 @@ def find_unused_daemonsets():
             for ds in ds_list:
                 if skip_due_to_label(ds) is True:
                     continue
-                if (ds.status.current_number_scheduled or 0) == 0 or is_resource_expired(ds, "orphanTTL"):
+                if (ds.status.current_number_scheduled or 0) == 0:
                     ns_unused.append(f"{ns}/{ds.metadata.name}")
+            return ns_unused
         except Exception as e:
             logging.error(f"Error in find_unused_daemonsets for namespace {ns}: {e}")
-        return ns_unused
+            return []
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_namespace, ns): ns for ns in NAMESPACES}
         for future in as_completed(futures):
@@ -44,11 +53,12 @@ def find_unused_replicasets():
             for rs in rs_list:
                 if skip_due_to_label(rs) is True:
                     continue
-                if (rs.spec.replicas or 0) == 0 or is_resource_expired(rs, "orphanTTL"):
+                if (rs.spec.replicas or 0) == 0:
                     ns_unused.append(f"{ns}/{rs.metadata.name}")
+            return ns_unused
         except Exception as e:
             logging.error(f"Error in find_unused_replicasets for namespace {ns}: {e}")
-        return ns_unused
+            return []
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_namespace, ns): ns for ns in NAMESPACES}
         for future in as_completed(futures):
@@ -66,7 +76,7 @@ def find_unused_jobs():
             for job in jobs:
                 if skip_due_to_label(job) is True:
                     continue
-                if job.status.succeeded or job.status.failed or is_resource_expired(job, "orphanTTL"):
+                if job.status.succeeded or job.status.failed:
                     ns_unused_jobs.append(f"{ns}/{job.metadata.name}")
         except Exception as e:
             logging.error(f"Error in find_unused_jobs for namespace {ns}: {e}")
@@ -113,7 +123,7 @@ def find_unused_ingresses():
                                     v1.read_namespaced_service(svc_name, ns)
                                 except Exception:
                                     backend_missing = True
-                if backend_missing or is_resource_expired(ing, "orphanTTL"):
+                if backend_missing:
                     ns_unused.append(f"{ns}/{ing.metadata.name}")
         except Exception as e:
             logging.error(f"Error in find_unused_ingresses for namespace {ns}: {e}")
@@ -234,7 +244,7 @@ def save_results_to_excel(unused_resources):
         with pd.ExcelWriter(filename, engine="xlsxwriter") as writer:
             for resource, items in unused_resources.items():
                 if items:
-                    sheet_name = resource[:31]
+                    sheet_name = resource[:31]  # Excel sheet name limit
                     df = pd.DataFrame(items, columns=[f"Unused {resource}"])
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
                     workbook = writer.book
@@ -249,6 +259,7 @@ def save_results_to_excel(unused_resources):
 
 def scan_unused_resources():
     logging.info("Starting scan for unused Kubernetes resources...")
+    print(f"Cluster Context: {CLUSTER_CONTEXT}")
     unused_resources = {
         "PersistentVolumes": find_unused_pvs(),
         "PersistentVolumeClaims": find_unused_pvcs(),
@@ -280,7 +291,8 @@ def scan_unused_resources():
     unused_resources["RoleBindings"] = rbac_rolebindings
     unused_resources["ClusterRoles"] = rbac_clusterroles
 
-    # Print unused resources for each kind.
+    # Print cluster context and unused resources for each kind.
+    print(f"\nCluster Context: {CLUSTER_CONTEXT}")
     for kind, items in unused_resources.items():
         print(f"\nUnused {kind} ({len(items)}):")
         for item in items:
@@ -291,4 +303,3 @@ def scan_unused_resources():
 
 if __name__ == "__main__":
     scan_unused_resources()
-          
