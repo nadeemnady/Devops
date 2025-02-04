@@ -19,6 +19,14 @@ logging.basicConfig(
 # Load Kubernetes configuration (from ~/.kube/config or in-cluster config)
 config.load_kube_config()
 
+# Retrieve the active cluster context from kubeconfig
+def get_cluster_context():
+    contexts, active_context = config.list_kube_config_contexts()
+    return active_context["context"].get("cluster", "UnknownCluster")
+
+CLUSTER_CONTEXT = get_cluster_context()
+logging.info(f"Active Cluster Context: {CLUSTER_CONTEXT}")
+
 # Initialize typed API clients and dynamic client
 v1 = client.CoreV1Api()
 apps_v1 = client.AppsV1Api()
@@ -34,7 +42,9 @@ dynamic_client = dynamic.DynamicClient(ApiClient())
 # ==============================================================================
 
 def get_namespaces():
-    """Return namespaces from file if available, else all namespaces."""
+    """
+    Return namespaces from file if available, else all namespaces.
+    """
     if os.path.exists("namespaces.txt"):
         with open("namespaces.txt", "r") as f:
             namespaces = [line.strip() for line in f.readlines() if line.strip()]
@@ -66,7 +76,7 @@ def parse_duration(duration_str):
 def skip_due_to_label(obj):
     """
     Checks for an override label "kor/used":
-      - "true": skip this resource.
+      - "true": skip this resource (treat as used).
       - "false": force it to be considered unused.
     Returns True, False, or None.
     """
@@ -81,6 +91,7 @@ def skip_due_to_label(obj):
 
 def is_resource_expired(obj, ttl_annotation="orphanTTL", default_ttl=timedelta(days=15)):
     """
+    (This function is retained for future use if needed.)
     Checks if the resource is older than the TTL.
     Uses TTL annotation if present; otherwise defaults to 15 days.
     """
@@ -95,7 +106,8 @@ def is_resource_expired(obj, ttl_annotation="orphanTTL", default_ttl=timedelta(d
 
 def is_orphaned(obj):
     """
-    Checks owner references. Returns True if any owner reference is unresolvable.
+    Checks owner references.
+    Returns True if any owner reference is unresolvable.
     """
     if not obj.metadata.owner_references:
         return False
@@ -114,6 +126,8 @@ def is_orphaned(obj):
 # ==============================================================================
 # ADVANCED UNUSED RESOURCE DETECTION FUNCTIONS (PART 1)
 # ==============================================================================
+# (Detection functions for PVs, PVCs, ConfigMaps/Secrets, Pods, Services,
+# Deployments, and StatefulSets.)
 
 def find_unused_pvs():
     try:
@@ -132,9 +146,9 @@ def find_unused_pvs():
 def find_unused_pvcs():
     """
     Enhanced PVC check:
-    - Retrieve all PVCs per namespace.
+    - Retrieve all PVCs for each namespace.
     - Build a set of PVCs referenced by pods in "Running" or "Pending" state.
-    - Also check the associated PV status (if available).
+    - Also check if a PVC is Bound but its associated PV is in Released/Failed state.
     - Mark PVC as unused if not Bound or if Bound but not referenced.
     """
     unused = []
@@ -205,7 +219,6 @@ def find_unused_configmaps_and_secrets():
 
 def find_unused_pods():
     unused = []
-    threshold = datetime.utcnow() - timedelta(hours=1)
     def process_namespace(ns):
         ns_unused = []
         try:
@@ -216,15 +229,10 @@ def find_unused_pods():
                 phase = pod.status.phase
                 if phase in ["Succeeded", "Failed"]:
                     ns_unused.append(f"{ns}/{pod.metadata.name}")
-                else:
-                    creation_ts = pod.metadata.creation_timestamp
-                    if creation_ts and (datetime.utcnow() - creation_ts.replace(tzinfo=None)) > timedelta(days=15):
-                        ns_unused.append(f"{ns}/{pod.metadata.name}")
-                    elif is_resource_expired(pod, "orphanTTL"):
-                        ns_unused.append(f"{ns}/{pod.metadata.name}")
+            return ns_unused
         except Exception as e:
             logging.error(f"Error in find_unused_pods for namespace {ns}: {e}")
-        return ns_unused
+            return []
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_namespace, ns): ns for ns in NAMESPACES}
         for future in as_completed(futures):
@@ -273,11 +281,10 @@ def find_unused_deployments():
                     ns_unused.append(f"{ns}/{dep.metadata.name}")
                 elif is_orphaned(dep):
                     ns_unused.append(f"{ns}/{dep.metadata.name}")
-                elif is_resource_expired(dep, "orphanTTL"):
-                    ns_unused.append(f"{ns}/{dep.metadata.name}")
+            return ns_unused
         except Exception as e:
             logging.error(f"Error in find_unused_deployments for namespace {ns}: {e}")
-        return ns_unused
+            return []
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_namespace, ns): ns for ns in NAMESPACES}
         for future in as_completed(futures):
@@ -293,14 +300,14 @@ def find_unused_statefulsets():
             for sts in sts_list:
                 if skip_due_to_label(sts) is True:
                     continue
-                if (sts.spec.replicas or 0) == 0 or is_resource_expired(sts, "orphanTTL"):
+                if (sts.spec.replicas or 0) == 0:
                     ns_unused.append(f"{ns}/{sts.metadata.name}")
+            return ns_unused
         except Exception as e:
             logging.error(f"Error in find_unused_statefulsets for namespace {ns}: {e}")
-        return ns_unused
+            return []
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_namespace, ns): ns for ns in NAMESPACES}
         for future in as_completed(futures):
             unused.extend(future.result())
     return unused
-                          
