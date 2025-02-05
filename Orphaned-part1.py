@@ -89,19 +89,9 @@ def skip_due_to_label(obj):
             return False
     return None
 
-def is_resource_expired(obj, ttl_annotation="orphanTTL", default_ttl=timedelta(days=15)):
-    """
-    Checks if the resource is older than a TTL.
-    Uses the TTL annotation if available; otherwise defaults to 15 days.
-    """
-    annotations = obj.metadata.annotations or {}
-    if ttl_annotation in annotations:
-        ttl = parse_duration(annotations[ttl_annotation])
-        if ttl:
-            age = datetime.utcnow() - obj.metadata.creation_timestamp.replace(tzinfo=None)
-            return age > ttl
-    age = datetime.utcnow() - obj.metadata.creation_timestamp.replace(tzinfo=None)
-    return age > default_ttl
+# Removed TTL-based filtering by omitting the TTL check function.
+# def is_resource_expired(obj, ttl_annotation="orphanTTL", default_ttl=timedelta(days=15)):
+#     ...
 
 def is_orphaned(obj):
     """
@@ -256,9 +246,10 @@ def find_unused_services():
                 except Exception as e:
                     logging.error(f"Error reading endpoints for service {ns}/{svc.metadata.name}: {e}")
                     ns_unused.append(f"{ns}/{svc.metadata.name}")
+            return ns_unused
         except Exception as e:
             logging.error(f"Error in find_unused_services for namespace {ns}: {e}")
-        return ns_unused
+            return []
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(process_namespace, ns): ns for ns in NAMESPACES}
         for future in as_completed(futures):
@@ -310,4 +301,4 @@ def find_unused_statefulsets():
         for future in as_completed(futures):
             unused.extend(future.result())
     return unused
-    
+        
