@@ -22,7 +22,7 @@ def get_cluster_context():
 CLUSTER_CONTEXT = get_cluster_context()
 
 # Optional: Set your webhook URL as an environment variable for notifications.
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., set this in your environment
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., set in your shell
 
 def send_webhook_notification(message):
     """
@@ -51,7 +51,6 @@ def find_unused_daemonsets():
             for ds in ds_list:
                 if skip_due_to_label(ds) is True:
                     continue
-                # If no pods are scheduled, mark it unused.
                 if (ds.status.current_number_scheduled or 0) == 0:
                     ns_unused.append(f"{ns}/{ds.metadata.name}")
             return ns_unused
@@ -73,7 +72,6 @@ def find_unused_replicasets():
             for rs in rs_list:
                 if skip_due_to_label(rs) is True:
                     continue
-                # Consider ReplicaSet unused if it has zero replicas.
                 if (rs.spec.replicas or 0) == 0:
                     ns_unused.append(f"{ns}/{rs.metadata.name}")
             return ns_unused
@@ -97,7 +95,6 @@ def find_unused_jobs():
             for job in jobs:
                 if skip_due_to_label(job) is True:
                     continue
-                # Consider jobs unused if they have completed (succeeded/failed).
                 if job.status.succeeded or job.status.failed:
                     ns_unused_jobs.append(f"{ns}/{job.metadata.name}")
         except Exception as e:
@@ -107,7 +104,6 @@ def find_unused_jobs():
             for cj in cronjobs:
                 if skip_due_to_label(cj) is True:
                     continue
-                # If a CronJob is not suspended and never scheduled, mark it unused.
                 if not cj.spec.suspend and not cj.status.lastScheduleTime:
                     ns_unused_cronjobs.append(f"{ns}/{cj.metadata.name}")
         except Exception as e:
@@ -132,14 +128,12 @@ def find_unused_ingresses():
                 if skip_due_to_label(ing) is True:
                     continue
                 backend_missing = False
-                # Check default backend service existence.
                 if ing.spec.default_backend:
                     svc_name = ing.spec.default_backend.service.name
                     try:
                         v1.read_namespaced_service(svc_name, ns)
                     except Exception:
                         backend_missing = True
-                # Check each rule's backend.
                 if ing.spec.rules:
                     for rule in ing.spec.rules:
                         if rule.http and rule.http.paths:
@@ -335,4 +329,4 @@ if __name__ == "__main__":
         send_webhook_notification(f"Unused resource scan for cluster '{CLUSTER_CONTEXT}' completed successfully.")
     except Exception as e:
         logging.error(f"Error sending webhook notification: {e}")
-        
+                
